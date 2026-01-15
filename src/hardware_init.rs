@@ -1,6 +1,3 @@
-use super::display::DisplayState;
-extern crate alloc;
-use alloc::boxed::Box;
 use embassy_time::Delay;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use esp_backtrace as _;
@@ -18,20 +15,23 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::options::ColorOrder;
 use mipidsi::Display;
 use mipidsi::{models::ST7789, Builder};
+use static_cell::StaticCell;
 
-pub struct PreflightHardware<'a> {
-    pub i2c0: I2C0<'a>,
-    pub spi2: SPI2<'a>,
-    pub pin_display_pw: GPIO7<'a>,
-    pub pin_backlight: GPIO45<'a>,
-    pub pin_dc: GPIO40<'a>,
-    pub pin_cs: GPIO42<'a>,
-    pub pin_reset: GPIO41<'a>,
-    pub pin_sck: GPIO36<'a>,
-    pub pin_mosi: GPIO35<'a>,
-    pub pin_miso: GPIO37<'a>,
-    pub pin_sda: GPIO3<'a>,
-    pub pin_scl: GPIO4<'a>,
+static DISPLAY_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
+
+pub struct PreflightHardware {
+    pub i2c0: I2C0<'static>,
+    pub spi2: SPI2<'static>,
+    pub pin_display_pw: GPIO7<'static>,
+    pub pin_backlight: GPIO45<'static>,
+    pub pin_dc: GPIO40<'static>,
+    pub pin_cs: GPIO42<'static>,
+    pub pin_reset: GPIO41<'static>,
+    pub pin_sck: GPIO36<'static>,
+    pub pin_mosi: GPIO35<'static>,
+    pub pin_miso: GPIO37<'static>,
+    pub pin_sda: GPIO3<'static>,
+    pub pin_scl: GPIO4<'static>,
 }
 
 pub type TftDisplay<'a> = Display<
@@ -44,51 +44,51 @@ pub type TftDisplay<'a> = Display<
     Output<'static>,
 >;
 
+pub struct DisplaySystem {
+    pub tft: TftDisplay<'static>,
+    pub backlight: Output<'static>,
+    pub power: Output<'static>,
+}
+
 pub struct AppHardware {
-    pub display: TftDisplay<'static>,
+    // pub display: DisplaySystem<'static>,
     pub i2c: I2c<'static, Blocking>,
     pub delay: Delay,
 }
 
-pub fn init_hardware<'a>(p: PreflightHardware<'a>) -> (AppHardware, DisplayState) {
-    // Init essential pieces of controller
+pub fn init_hardware(p: PreflightHardware) -> (AppHardware, DisplaySystem) {
+    // In theory we should let the fan spool
     let mut delay = Delay;
-    // let mut buffer = [0_u8; 4096];
-    // Allocate on the heap and "leak" it so it becomes &'static mut [u8]
-    let buffer = Box::leak(Box::new([0u8; 4096]));
 
-    // Can't forget the backlight lol
-    let mut display_power = Output::new(
+    let buffer = DISPLAY_BUFFER.init([0u8; 4096]); // Static &'static mut [u8]
+
+    let display_power = Output::new(
         p.pin_display_pw.degrade(),
         Level::High,
         OutputConfig::default(),
     );
-    display_power.set_high();
 
-    let mut tft_backlight = Output::new(
+    let tft_backlight = Output::new(
         p.pin_backlight.degrade(),
         Level::High,
         OutputConfig::default(),
     );
-    tft_backlight.set_high();
 
-    // Pins for display, direct current and chip select
     let dc = Output::new(p.pin_dc.degrade(), Level::High, OutputConfig::default());
     let cs = Output::new(p.pin_cs.degrade(), Level::High, OutputConfig::default());
 
-    // Init SPI for display purposes
-    let spi_config = Config::default()
-        .with_frequency(Rate::from_mhz(3))
-        .with_mode(Mode::_0);
-
-    let spi = Spi::new(p.spi2, spi_config)
-        .unwrap()
-        .with_sck(p.pin_sck.degrade())
-        .with_mosi(p.pin_mosi.degrade())
-        .with_miso(p.pin_miso.degrade());
+    let spi = Spi::new(
+        p.spi2,
+        Config::default()
+            .with_frequency(Rate::from_mhz(40))
+            .with_mode(Mode::_0),
+    )
+    .unwrap()
+    .with_sck(p.pin_sck.degrade())
+    .with_mosi(p.pin_mosi.degrade())
+    .with_miso(p.pin_miso.degrade());
 
     let spi_device = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
-
     let si = SpiInterface::new(spi_device, dc, buffer);
 
     let display = Builder::new(ST7789, si)
@@ -115,11 +115,13 @@ pub fn init_hardware<'a>(p: PreflightHardware<'a>) -> (AppHardware, DisplayState
 
     (
         AppHardware {
-            // Hitting the special "I think my hardware won't get deallocated" button
-            display: unsafe { core::mem::transmute(display) },
-            i2c: unsafe { core::mem::transmute(i2c) },
-            delay: embassy_time::Delay,
+            i2c: i2c,
+            delay: Delay,
         },
-        DisplayState::new(),
+        DisplaySystem {
+            tft: display,
+            backlight: tft_backlight,
+            power: display_power,
+        },
     )
 }

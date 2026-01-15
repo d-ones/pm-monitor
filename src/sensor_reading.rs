@@ -3,9 +3,13 @@ use core::iter::Iterator;
 use core::marker::Copy;
 use core::option::Option::{self, None, Some};
 use core::prelude::rust_2024::derive;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
 use zerocopy::{byteorder::network_endian::U16, FromBytes};
 
 // Zero copy struct used for converting sensor readings to Rust type
+pub static DATA_BUS: PubSubChannel<CriticalSectionRawMutex, PlantowerFrame, 4, 2, 1> =
+    PubSubChannel::new();
 
 #[derive(FromBytes, Clone, Copy)]
 #[repr(C, packed)]

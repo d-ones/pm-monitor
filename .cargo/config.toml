@@ -1,5 +1,5 @@
 [target.xtensa-esp32s2-none-elf]
-runner = "espflash flash --chip esp32s2 --no-stub"
+runner = "espflash flash --chip esp32s2 --no-stub --monitor"
 
 [env]
 
